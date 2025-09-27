@@ -1,1 +1,422 @@
-test
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tetris — Web</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#36c;--muted:#97a0b5;}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Helvetica,Arial,sans-serif;background:linear-gradient(180deg,#021027 0%,var(--bg) 100%);color:#e6eef6}
+    .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
+    .game{display:grid;grid-template-columns:320px 240px;gap:18px;align-items:start}
+    .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:14px;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,0.6)}
+    .board{background:var(--panel);border-radius:8px;padding:8px}
+    canvas{display:block;background:#071223;border-radius:6px}
+    .hud{display:flex;flex-direction:column;gap:10px}
+    .stats{display:flex;flex-direction:column;gap:6px}
+    .stat{font-size:14px;color:var(--muted)}
+    .controls{display:flex;flex-direction:column;gap:8px}
+    .row{display:flex;gap:8px}
+    button.btn{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:inherit;font-weight:600}
+    .mobile-controls{display:none;position:relative}
+    /* mobile layout */
+    @media (max-width:900px){
+      .game{grid-template-columns:1fr;}
+      .mobile-controls{display:block}
+      .desktop-only{display:none}
+    }
+    .touch-pad{position:fixed;left:0;right:0;bottom:12px;display:flex;justify-content:center;gap:16px;pointer-events:none}
+    .touch-group{pointer-events:auto;display:flex;gap:8px}
+    .touch-btn{width:64px;height:64px;border-radius:12px;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;font-weight:700;user-select:none;}
+    .touch-btn:active{transform:scale(.98)}
+    .small{font-size:13px;padding:6px 8px}
+    .title{font-size:18px;font-weight:700}
+    .muted{color:var(--muted);font-size:13px}
+    .center{display:flex;align-items:center;justify-content:center}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game">
+      <div class="panel">
+        <div class="title">Tetris — Web</div>
+        <div class="muted">Keyboard / Touch 対応</div>
+        <div style="height:12px"></div>
+        <div class="board center">
+          <canvas id="board" width="320" height="640"></canvas>
+        </div>
+        <div style="height:12px"></div>
+        <div class="controls desktop-only">
+          <div class="row"><button id="btnStart" class="btn">Start / Restart</button><button id="btnPause" class="btn">Pause</button></div>
+          <div class="row"><span class="muted">Controls: ← → move, ↑ rotate, ↓ soft drop, space hard drop, p pause</span></div>
+        </div>
+      </div>
+
+      <div class="panel hud">
+        <div class="stats">
+          <div class="stat">Score: <span id="score">0</span></div>
+          <div class="stat">Level: <span id="level">1</span></div>
+          <div class="stat">Lines: <span id="lines">0</span></div>
+        </div>
+        <div style="height:8px"></div>
+        <div>
+          <div class="muted">Next</div>
+          <canvas id="next" width="120" height="120" style="background:transparent;margin-top:6px;border-radius:6px"></canvas>
+        </div>
+        <div style="height:8px"></div>
+        <div class="muted">Hints</div>
+        <div class="muted" style="font-size:13px">スマホでは画面下のボタンを使って操作してください。長押しで移動可能。</div>
+      </div>
+
+      <!-- Touch controls for mobile -->
+      <div class="mobile-controls">
+        <div class="touch-pad">
+          <div class="touch-group">
+            <div id="tLeft" class="touch-btn">◀</div>
+            <div id="tRotate" class="touch-btn">⟳</div>
+            <div id="tRight" class="touch-btn">▶</div>
+          </div>
+          <div class="touch-group">
+            <div id="tDown" class="touch-btn">⇩</div>
+            <div id="tDrop" class="touch-btn">⤓</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+  // Simple Tetris implementation — single-file
+  (function(){
+    const COLS = 10, ROWS = 20, BLOCK = 32;
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    // scale to match block size
+    canvas.width = COLS*BLOCK; canvas.height = ROWS*BLOCK;
+
+    const nextCanvas = document.getElementById('next');
+    const nctx = nextCanvas.getContext('2d');
+
+    const scoreEl = document.getElementById('score');
+    const levelEl = document.getElementById('level');
+    const linesEl = document.getElementById('lines');
+    const btnStart = document.getElementById('btnStart');
+    const btnPause = document.getElementById('btnPause');
+
+    const colors = [null,'#00f0f0','#0000f0','#f0a000','#f0f000','#00f000','#a000f0','#f00000'];
+
+    const SHAPES = {
+      I: [[1,1,1,1]],
+      J: [[2,0,0],[2,2,2]],
+      L: [[0,0,3],[3,3,3]],
+      O: [[4,4],[4,4]],
+      S: [[0,5,5],[5,5,0]],
+      T: [[0,6,0],[6,6,6]],
+      Z: [[7,7,0],[0,7,7]]
+    };
+    const TYPES = Object.keys(SHAPES);
+
+    function createMatrix(w,h){
+      const m = [];
+      for(let i=0;i<h;i++) m.push(new Array(w).fill(0));
+      return m;
+    }
+
+    // grid of placed blocks
+    let grid = createMatrix(COLS, ROWS);
+
+    // Draw helpers
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // background
+      ctx.fillStyle = '#071223';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      // draw placed blocks
+      for(let r=0;r<ROWS;r++){
+        for(let c=0;c<COLS;c++){
+          const v = grid[r][c];
+          if(v){ drawBlock(ctx,c,r,colors[v]); }
+        }
+      }
+
+      // draw active piece (if any)
+      if(player && player.matrix){
+        for(let y=0;y<player.matrix.length;y++){
+          for(let x=0;x<player.matrix[y].length;x++){
+            const val = player.matrix[y][x];
+            if(val){ drawBlock(ctx, player.pos.x + x, player.pos.y + y, colors[val]); }
+          }
+        }
+      }
+
+      // grid lines
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+      ctx.lineWidth = 1;
+      for(let x=0;x<=COLS;x++){
+        ctx.beginPath();ctx.moveTo(x*BLOCK,0);ctx.lineTo(x*BLOCK,canvas.height);ctx.stroke();
+      }
+      for(let y=0;y<=ROWS;y++){
+        ctx.beginPath();ctx.moveTo(0,y*BLOCK);ctx.lineTo(canvas.width,y*BLOCK);ctx.stroke();
+      }
+    }
+
+    function drawBlock(ctx,x,y,color){
+      // don't draw if out of bounds
+      if(x < 0 || x >= COLS || y < 0 || y >= ROWS) return;
+      const px = x*BLOCK, py = y*BLOCK;
+      ctx.fillStyle = color || '#888';
+      roundRect(ctx, px+1, py+1, BLOCK-2, BLOCK-2, 6, true, false);
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(px+6, py+4, Math.max(0,BLOCK-10), 6);
+    }
+
+    function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+      if (typeof r === 'undefined') r = 5;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+      if (fill) ctx.fill();
+      if (stroke) ctx.stroke();
+    }
+
+    function rotate(matrix){
+      // transpose + reverse rows (clockwise rotation)
+      const H = matrix.length, W = matrix[0].length;
+      const res = [];
+      for(let x=0;x<W;x++){
+        const row = [];
+        for(let y=H-1;y>=0;y--){ row.push(matrix[y][x]); }
+        res.push(row);
+      }
+      return res;
+    }
+
+    // collision detection with bounds and grid
+    function collide(grid,player){
+      if(!player || !player.matrix) return false;
+      const m = player.matrix;
+      const offset = player.pos;
+      for(let y=0;y<m.length;y++){
+        for(let x=0;x<m[y].length;x++){
+          if(m[y][x]){
+            const gx = x + offset.x;
+            const gy = y + offset.y;
+            // out of bounds -> collision
+            if(gx < 0 || gx >= COLS || gy >= ROWS) return true;
+            if(gy >= 0 && grid[gy][gx] !== 0) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function merge(grid,player){
+      if(!player || !player.matrix) return;
+      for(let y=0;y<player.matrix.length;y++){
+        for(let x=0;x<player.matrix[y].length;x++){
+          const val = player.matrix[y][x];
+          if(val){
+            const gx = player.pos.x + x;
+            const gy = player.pos.y + y;
+            if(gy >= 0 && gy < ROWS && gx >= 0 && gx < COLS){
+              grid[gy][gx] = val;
+            }
+          }
+        }
+      }
+    }
+
+    function clearLines(){
+      let rowCount = 0;
+      outer: for(let y = ROWS -1; y>=0; y--){
+        for(let x=0;x<COLS;x++){
+          if(grid[y][x] === 0){ continue outer; }
+        }
+        grid.splice(y,1);
+        grid.unshift(new Array(COLS).fill(0));
+        rowCount++;
+        y++; // re-check same y after splice
+      }
+      if(rowCount>0){
+        lines += rowCount;
+        score += computeScore(rowCount, level);
+        level = Math.floor(lines/10)+1;
+        updateHUD();
+      }
+    }
+
+    function computeScore(rows, level){
+      const base = [0,40,100,300,1200];
+      return (base[rows] || 0) * level;
+    }
+
+    function randomPiece(){
+      const type = TYPES[Math.floor(Math.random()*TYPES.length)];
+      // deep copy shape and remap numbers to type index+1
+      const shape = SHAPES[type].map(r=>r.slice());
+      const id = TYPES.indexOf(type)+1;
+      return shape.map(r=>r.map(v=>v? id : 0));
+    }
+
+    // player and state
+    let player = {pos:{x:3,y:0},matrix: randomPiece()};
+    let next = randomPiece();
+    let dropCounter = 0, dropInterval = 1000, lastTime = 0;
+    let score = 0, level = 1, lines = 0; let paused=false, over=false;
+
+    function updateHUD(){ scoreEl.textContent = score; levelEl.textContent = level; linesEl.textContent = lines; }
+
+    function resetPlayer(){
+      // ensure next exists
+      if(!next) next = randomPiece();
+      // set current piece to a copy of next
+      player.matrix = next.map(r=>r.slice());
+      // prepare next
+      next = randomPiece();
+      // position at top center (calculate width safely)
+      player.pos.y = 0;
+      const pieceWidth = (player.matrix && player.matrix[0]) ? player.matrix[0].length : 1;
+      player.pos.x = Math.floor((COLS - pieceWidth)/2);
+
+      // if immediate collision -> game over
+      if(collide(grid,player)){
+        over = true; paused = true;
+      }
+      renderNext();
+    }
+
+    function renderNext(){
+      nctx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
+      if(!next) return;
+      const size = Math.max(next.length, (next[0] && next[0].length) || 0);
+      const cell = Math.floor((nextCanvas.width - 8) / size) || 16;
+      const padX = Math.floor((nextCanvas.width - cell*size)/2);
+      const padY = Math.floor((nextCanvas.height - cell*size)/2);
+      for(let y=0;y<next.length;y++){
+        for(let x=0;x<next[y].length;x++){
+          const v = next[y][x];
+          if(v){
+            nctx.fillStyle = colors[v] || '#888';
+            nctx.fillRect(padX + x*cell + 2, padY + y*cell + 2, Math.max(0, cell-4), Math.max(0,cell-4));
+          }
+        }
+      }
+    }
+
+    function drop(){
+      if(!player.matrix) return;
+      player.pos.y++;
+      if(collide(grid,player)){
+        player.pos.y--;
+        merge(grid,player);
+        clearLines();
+        resetPlayer();
+      }
+      dropCounter = 0;
+    }
+
+    function hardDrop(){
+      if(!player.matrix) return;
+      while(!collide(grid,player)) player.pos.y++;
+      player.pos.y--;
+      merge(grid,player);
+      clearLines();
+      resetPlayer();
+    }
+
+    function move(dir){
+      if(!player.matrix) return;
+      player.pos.x += dir;
+      if(collide(grid,player)) player.pos.x -= dir;
+    }
+
+    function rotatePlayer(){
+      if(!player.matrix) return;
+      const posX = player.pos.x;
+      const rotated = rotate(player.matrix);
+
+      // try to apply rotation with wall kicks (simple)
+      let offset = 0;
+      player.matrix = rotated;
+      // if colliding, try offsets
+      const kicks = [0,1,-1,2,-2];
+      let applied = false;
+      for(let i=0;i<kicks.length;i++){
+        player.pos.x = posX + kicks[i];
+        if(!collide(grid,player)) { applied = true; break; }
+      }
+      if(!applied){
+        // revert
+        player.matrix = rotate(rotate(rotate(rotated)));
+        player.pos.x = posX;
+      }
+    }
+
+    function update(time=0){
+      const delta = time - lastTime; lastTime = time;
+      if(!paused && !over){
+        dropCounter += delta;
+        if(dropCounter > (dropInterval / Math.max(1, level))){
+          drop();
+        }
+      }
+      draw();
+      requestAnimationFrame(update);
+    }
+
+    // input
+    document.addEventListener('keydown', e=>{
+      if(e.key === 'ArrowLeft') move(-1);
+      else if(e.key === 'ArrowRight') move(1);
+      else if(e.key === 'ArrowUp') rotatePlayer();
+      else if(e.key === 'ArrowDown'){ drop(); }
+      else if(e.code === 'Space'){ hardDrop(); }
+      else if(e.key === 'p' || e.key === 'P'){ togglePause(); }
+    });
+
+    // touch buttons
+    function bindBtn(id, onDown, onUp){
+      const el = document.getElementById(id);
+      if(!el) return; // safety
+      let timer = null;
+      const start = (ev)=>{ ev.preventDefault(); onDown(); // begin repeat
+        timer = setInterval(onDown,120);
+      };
+      const end = ()=>{ if(timer) clearInterval(timer); onUp && onUp(); };
+      el.addEventListener('pointerdown', start);
+      window.addEventListener('pointerup', end);
+      el.addEventListener('pointerleave', end);
+    }
+
+    bindBtn('tLeft', ()=>move(-1), null);
+    bindBtn('tRight', ()=>move(1), null);
+    bindBtn('tDown', ()=>drop(), null);
+    bindBtn('tDrop', ()=>hardDrop(), null);
+    bindBtn('tRotate', ()=>rotatePlayer(), null);
+
+    btnStart.addEventListener('click', ()=>{ startGame(); });
+    btnPause.addEventListener('click', ()=>{ togglePause(); });
+
+    function togglePause(){ if(over) return; paused = !paused; btnPause.textContent = paused? 'Resume' : 'Pause'; }
+
+    function startGame(){
+      grid = createMatrix(COLS, ROWS);
+      player = {pos:{x:3,y:0},matrix: randomPiece()};
+      score = 0; level = 1; lines = 0; over=false; paused=false; next = randomPiece();
+      resetPlayer(); updateHUD();
+    }
+
+    // init
+    resetPlayer(); updateHUD(); requestAnimationFrame(update);
+
+  })();
+  </script>
+</body>
+</html>
+
